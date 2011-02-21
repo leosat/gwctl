@@ -1,0 +1,6 @@
+#!/bin/sh
+
+echo "content-type: text/html; charset=koi8-r"
+echo ""
+
+

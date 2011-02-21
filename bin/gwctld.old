@@ -1,0 +1,350 @@
+#!/bin/sh
+
+. /etc/gwctl.conf
+. $COMMON_SH_LIB
+
+LINE1=-----------------------------------------------------
+
+#
+# CLEANUP ${ROOT}/var/* files
+#
+cd ${ROOT}
+[ "${ROOT}" != "/" -a -z "`echo ${ROOT} | grep '\.\.'`" -a `pwd | grep gwctl`  ] && {
+	rm -rf ${ROOT}/var/*
+}
+
+#
+# Initialise IO channels
+#
+touch $TSFILE
+echo "" > $DMN_IN && chgrp www $DMN_IN && chmod 660 $DMN_IN
+echo "" > $WWW_IN && chgrp www $WWW_IN && chmod 660 $DMN_IN
+# echo "" > ${ROOT}/general.${RUNTIME_CONFFILE_SUFFIX} 
+echo -n "AUTO" > $MODEF
+
+#
+# Redirect output to log file.
+#
+exec > $DMNLOGF
+
+#
+# Unlock all potentially locked resources
+#
+gwctl_clear_all_locks
+
+#___________________________________________
+
+echo $$ > $DMNPIDF
+echo " [i] STARTED AT `date`"
+
+trap __exit TERM QUIT INT
+
+__exit( ) {
+	echo
+	echo EXITING GENTLY
+	echo
+	rm $DMNPIDF
+	exit 0;
+}
+
+#
+# Spawn a thread with an infinite cycle.
+#
+while :
+do
+	logprefix="(Autoswitching daemon)"
+
+	#
+	# Include runtime configuration if exists
+	#
+	read_runtime_conf
+
+	#
+	# Make sure we are in automatic switching mode... if yes, then.. 
+	#
+	if in_automode
+	then
+		echo " ${LINE1}"
+		echo " [i]$logprefix I'm in automode on `date`."
+		
+		#
+		# Loop throug the subjects (whom we want to switch)
+		#
+		for subj in $subjects
+		do	
+
+			echo " ${LINE1}"
+			echo " [i]$logprefix >>>> Working on subject ${subj}. <<<<"
+			[ `subj_get "$subj" "" void_in_automode ` ] && {
+				echo " [id]$logprefix Skipping it in automode."
+				continue
+			}
+
+			subj_init ( ) {
+				#
+				# What is the currently active channel for current subject?
+				#
+				active_channel=`subj_get $subj "" current_active_ch_name`
+				[ -z "$active_channel" ] && active_channel="UNKNOWN"
+
+				#
+				# What is the weight of the current active channel for the subject.
+				#
+				active_channel_weight=`subj_get "$subj" "$active_channel" weight`
+				[ -z "$active_channel_weight" ] && active_channel_weight="0"		
+
+				echo " [i]$logprefix Current active channel name is $active_channel; Its' weight is $active_channel_weight"
+
+				#
+				# Check if we have some more preferable channel for this subject
+				#
+				eval more_preferable_channel_name=`get_preferable_ch_name_by_cond "$subj" " -gt $active_channel_weight"`
+
+				#
+				# If we didn't find any, print the message
+				#
+				if [ -z "$more_preferable_channel_name" ]
+				then
+					echo " [i]$logprefix Haven't found more preferable channel for $subj"
+				#
+				# Otherwise, print the message too...
+				#
+				else
+					echo " [i]$logprefix The most preferable channel found is $more_preferable_channel_name."
+				fi
+
+			}
+
+			subj_init
+
+			[ -z "$active_channel_weight" -a "$active_channel" != "UNKNOWN" ] && {
+				echo " [iw]$logprefix Got no information on channel $active_channel for subject $subj."
+				continue
+			}
+
+			echo " [i]$logprefix Gonna check if the current channel is alive..."
+
+			#
+			# Check if current active channel is actually alive
+			#
+			subj_ch_alive_chk=`subj_get "$subj" "" alive_chk`
+
+			if [ "$subj_ch_alive_chk" ]
+			then
+				eval "$subj_ch_alive_chk" > /dev/null
+			else
+				echo -n " [w]$logprefix Check command for $subj is not defined,"
+				echo -n " using default check procedure for IP channel "
+				echo 	" in the form of chk_channel_is_alive CUR_CHAN_GW_IP"
+				gw_ip=`subj_get $subj $active_channel gw`
+				: ${gw_ip-`subj_get $subj $active_channel isp_gw`}
+				eval "chk_channel_is_alive $gw_ip"
+			fi
+			ch_chk_status=$?
+			active_ch_is_dead=""
+			[ "$ch_chk_status" -ne 0 ] && 
+				active_ch_is_dead="1"
+
+			if [ "$active_ch_is_dead" ]
+			then 
+				echo " [i]$logprefix Just checked it... the news are that active channel is DEAD... "
+			else
+				echo " [i]$logprefix Not bad news! The current active channel seems to be quite alive!"
+			fi
+
+			#
+			# If it is NOT alive OR we have some more preferable channel to try...
+			#
+			if [ "$active_ch_is_dead" -o "$more_preferable_channel_name" ]
+			then
+				echo " [i]$logprefix Need something to do, will try to switch... "
+				#
+				# If current active channel is alive, keep us from switching
+				#	to the lesser priority channels.
+				#
+				if [ ! "$active_ch_is_dead" ]
+				then
+					min_weight_to_try=$(($active_channel_weight + 1))
+					echo " [i]$logprefix Since the current active channel is alive, we prevent switching to a channel with lesser weight."
+				else
+					min_weight_to_try=1
+					echo " [i]$logprefix Since the current active channel is down, the minimal weight we are going to try will be 1."
+				fi
+
+				#
+				# If there is more preferable channel, count down right from its weight
+				#
+				if [ "$more_preferable_channel_name" ]
+				then
+					max_weight_to_try=`subj_get $subj $more_preferable_channel_name weight`
+					echo " [i]$logprefix We want to start trying channels down from the most preferable one, $more_preferable_channel_name; Its' weight is $max_weight_to_try"
+				#
+				# ... else,  count down from the active's channel weight - 1
+				#
+				else
+					max_weight_to_try=$(($active_channel_weight - 1))
+					echo " [i]$logprefix No more preferable channels than this one... counting down from its weight."
+				fi
+
+				#
+				# Initialise a counter variable...
+				#
+				weight_to_try=$max_weight_to_try
+
+				if [ "$active_ch_is_dead" ]
+				then
+					echo " [i]$logprefix Current active channel is NOT alive... so trying to switch to channel even with a lesser weight."
+				elif [ ! "$active_ch_is_dead" -a "$weight_to_try" -le "$active_channel_weight" ]
+				then
+					echo " [i]$logprefix Current channel is alive, and it seems to be the most preferable in this situation, so we do not try to switch to channel with lesser weight. "
+					continue
+				fi
+
+				#
+				# (while) Go through all the weights from the weight of the channel we want to try to some chosen minimal weight
+				#
+				while [ "$weight_to_try" -ge "$min_weight_to_try" ]
+				do
+					#
+					# Get channel name to switch to by chosen weight
+					# 
+					ch_name_to_try=`get_preferable_ch_name_by_cond $subj ' -eq '$weight_to_try`
+
+					#
+					# Try the channel by chosen weight, but skip current active channel..
+					#
+					if 
+						[ "$ch_name_to_try" ] &&
+						[ "$ch_name_to_try" != "$active_channel" ] 
+					then
+						echo " [i]$logprefix In choosing cycle: Current channel ($active_channel) weight is `subj_get $subj $active_channel weight`."
+						echo " [i]$logprefix In choosing cycle: Gonna try $ch_name_to_try channel"
+	
+						ch_gw=`subj_get $subj $ch_name_to_try gw`
+
+						#
+						# If the channel is really  alive 
+						#
+						if chk_channel_is_alive "$ch_gw"
+						then
+							#
+							# Switch to it.
+							#
+							if gwctl_is_locked "${SW_RES}_${subj}"
+							then
+								echo " [id]$logprefix The resource '${SW_RES}_${subj}' is locked."
+							else
+								echo " [i]$logprefix Switching to $ch_name_to_try on `date`"
+								if [ "`subj_get $subj $ch_name_to_try oncmd`" ]
+								then
+									eval `subj_get $subj $ch_name_to_try oncmd` > /dev/null
+								else
+									eval `$SWITCH_SCRIPT $subj $ch_name_to_try` > /dev/null
+								fi
+								echo -n $timestamp > $TSFILE
+								echo " [i]$logprefix Automatically switched $subj to $ch_name_to_try." | mail -s "`hostname`: Auto-switching $subj to $ch_name_to_try" unix-admins@ariel.ru
+								subj_init 
+								break
+							fi
+						fi
+					fi
+
+					if [ "$weight_to_try" -eq "$min_weight_to_try" ]
+					then
+						if [ "$active_ch_is_dead" ]
+						then
+							echo " [i]$logprefix Got to weight $min_weight_to_try, but didn't switch to anything. So stop trying. Is there any hope in this world?"
+						else
+							echo " [i]$logprefix Got to weight $min_weight_to_try, but didn't switch to anything better than the current channel. So stop trying."
+						fi
+						break
+					fi
+
+					#
+					# Decrement weight we want to try
+					#
+					weight_to_try=$(($weight_to_try - 1))
+				done
+			fi
+		done
+
+		echo " ${LINE1}"
+		echo " [i]$logprefix Sleeping for $GWCTLD_SEC_TO_SLEEP seconds now... "
+		sleep $GWCTLD_SEC_TO_SLEEP
+	else
+		false && {
+			timestamp=`date "+%s"`
+		
+			if [ -f "$TSFILE" ]; then
+				last_timestamp=`cat $TSFILE`
+			else
+				last_timestamp=$timestamp
+			fi
+			
+			timestamps_delta=$(($timestamp - $last_timestamp))
+		}
+	fi
+done &
+
+www_iface_listener ( ) { 
+	logprefix="(Command from www interface)"
+	getbuf $DMN_IN INPT
+	if [ "$INPT" ];
+	then
+		echo " [d]$logprefix Input from www interface was $INPT "
+		case "$INPT" in
+			SET_VAR*)
+				local s=`echo ${INPT##SET_VAR_} | sed -E 's/([^=]+)=(.*)/\1__SEP__\2/'`
+				local var=`echo "$s" | awk -F"__SEP" '{print $1}'`
+				local val=`echo "$s" | awk -F"__SEP__" '{print $2}'`
+				set_runtime_conf "$var" "$val"
+			;;
+			CH_CHAN*)
+				INPT2=${INPT##CH_CHAN_}
+				subj=`echo "$INPT2" | sed -E 's/(.+)@.+/\1/'`
+				chan=`echo "$INPT2" | sed -E 's/.+@(.+)/\1/'`
+				if gwctl_is_locked "${SW_RES}_${subj}" 
+				then
+					echo " [id] The resource '${SW_RES}_${subj}' is locked."
+				else
+					echo " [i] Going to switch $subj to $chan"
+					echo " [i] Forking and calling the executable..."
+					{	
+						if [ "`subj_get $subj $chan oncmd`" ]
+						then
+							eval `subj_get $subj $chan oncmd` > /dev/null
+						else
+							eval `$SWITCH_SCRIPT $subj $chan` > /dev/null
+						fi
+
+						echo " [i]$logprefix Executable returned $?"
+					} &
+				fi
+			;;
+			"SET_MODE_AUTO")
+				if [ "$MODEF" ];
+				then
+					echo -n AUTO > "$MODEF"
+				fi
+			;;
+			"SET_MODE_MANUAL")
+				if [ "$MODEF" ];
+				then
+					echo -n MANUAL > "$MODEF"
+				fi
+			;;
+			*)
+			;;
+		esac
+	fi
+	
+	sleep 1
+}
+
+#
+# Reading and executing commands coming from web-interface.
+#
+while : ; 
+do
+	www_iface_listener
+done

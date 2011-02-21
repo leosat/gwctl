@@ -1,0 +1,618 @@
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+pre_switching ( ) {
+	subj=$1
+	chan=$2
+        set_runtime_conf ${subj}_pending_channel $chan
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+post_switching ( ) {
+	subj=$1
+	chan=$2
+        set_runtime_conf ${subj}_active_channel $chan
+        set_runtime_conf ${subj}_pending_channel -
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+gwctl_clear_all_locks ( ) {
+	rm ${LCK_FILE_PREFIX}_* > /dev/null 2>&1
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+gwctl_is_locked ( ) {
+	resource=$1
+	[ -z "$resource" ] && return 1
+	[ -f ${LCK_FILE_PREFIX}_$resource ] && return 0
+	return 1
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+gwctl_unlock ( ) {
+	local resource=$1
+	local salt=$2
+	[ -z "$resource" ] && return 1
+	local ticket_prefix=${LCK_FILE_PREFIX}_${resource}
+	local ticket=${ticket_prefix}@${salt}_$$
+
+	[ -f "${ticket}" ] && rm ${ticket} && return 0 # UNLOCK ACTIVE WAITING LOCK TICKETS
+	[ -f ${LCK_FILE_PREFIX}_$resource ] && rm ${LCK_FILE_PREFIX}_$resource && return 0 # UNLOCK OLD BAD LOCKS
+
+	return 1
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION: Deprecated
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+gwctl_lock ( ) {
+	resource=$1
+	[ -z "$resource" ] && return 1
+	[ ! -f ${LCK_FILE_PREFIX}_$resource ] && touch ${LCK_FILE_PREFIX}_$resource && return 0
+	return 1
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION: Good locking function
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+gwctl_lock_wait ( ) {
+	local resource=$1
+	local salt=$2
+	local return_on_collision=$3
+	local debug=$4
+	[ -z "$resource" -o -z "$salt" ] && return 1
+	local ticket_prefix=${LCK_FILE_PREFIX}_${resource}
+	local ticket=${ticket_prefix}@${salt}_$$
+
+	# [ -f ${ticket} ] && return 0
+
+	while :
+	do
+		sleep 0.`jot -r 1 1 99` && touch ${ticket}
+
+		if [ `ls ${ticket_prefix}* 2>/dev/null | wc -w` -eq 1 ]
+		then
+			# LOCKED IT!... =)
+			return 0
+		else
+			# COLLISION DETECTED, REMOVE THE TICKET AND START AGAIN...
+			rm ${ticket}
+			[ "${debug}" ] && echo " [d] Locking collision for ${resource} in PID=$$, SALT=${salt}" 
+			[ "${return_on_collision}" ] && return 2
+			sleep 0.`jot -r 1 1 99`
+		fi
+	done	
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+in_automode( ) {
+	
+	[ "`get_runtime_conf mode`" = "AUTO" ] &&
+		return 0
+	return 1
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+getbuf ( ) {
+	read $2 < $1
+	echo "" > $1
+	return $?
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+setbuf ( ) {
+	echo $2 > $1
+	return $?
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+parse_uri ( ) {
+	URI=${1};
+	# echo ${URI}
+	#
+	# No parsing for bad chars!
+	#
+	case $URI in
+		[\`\(\$])
+			return 1
+		;;
+	esac
+	while [ ${i:=1} -lt ${2:-20} ]; do
+		##  echo $i;
+		PARAM=`echo ${URI} | cut -f${i} -d"&"`;
+		if [ ${PARAM} ]; then
+			# echo param is: ${PARAM};
+			PNAME=`echo ${PARAM} | cut -f1 -d"="`; ## echo Pname: $PNAME
+			PVAL=`echo ${PARAM} | cut -f2 -d"="`; ## echo Pval: $PVAL
+			#
+			# Make a global var for it
+			#
+			eval GET_${PNAME}=\${PVAL};
+		fi
+		i=$(($i+1));
+	done
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION: Deprecated
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+chk_channel_is_alive ( ) {
+
+	local ispgw=$1
+	local ipregex="([0-9]{1,3}\.?){4}"
+	local score=0
+	local logprefix="(Testing ISP channel)"
+
+	if [ `id -u` -eq 0  ]
+	then
+		echo " [i]$logprefix Testing ISP gateway $ispgw"
+		[ "` echo $ispgw | grep -E $ipregex `" ] || {			
+			echo " [fe] Fatal error! Incorrect ISP gw address format."
+			return 5 
+		}
+		ping -qQc 1 -t 1 $ispgw > /dev/null 2>&1 || {
+			echo " [fe] Fatal error! Failed to test ISP gw $ispgw"
+			return 4
+		}		
+	else
+		echo " [i] Running not under root. Testing with current ISP gateway."
+	fi
+
+	#
+	# Ping hosts
+	#
+	for ip in $CHAN_TEST_IP_LIST
+	do
+		# Redirect routes to the current $ip
+		[ `id -u` -eq 0  ] && {
+			# Delete the route if it already exists 
+			route delete $ip > /dev/null 2>&1
+			# Adding route to the current $ip     
+			route add $ip $ispgw > /dev/null 2>&1 || {
+				echo " [fe]$logprefix Fatal error! Failed to end route to $ip thrugh $ispgw"
+				return 3 
+			}			
+		} 	
+
+		echo " [i]$logprefix Current tested IP is $ip "
+		if ping -Qqc 4 $ip > /dev/null
+		then
+			score=$(($score + 1))
+		else
+			echo " [e]$logprefix Error pinging the host $ip "
+		fi				
+
+		[ `id -u` -eq 0  ] && {
+			route delete $ip > /dev/null 2>&1	
+		}		
+	done
+
+	echo " [i]$logprefix Final score is $score"
+
+	[ $score -ge $CHAN_TEST_SUFFICIENT_SCORE ] && return 0 
+	return 2
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+chk_ip_channel_is_alive ( ) {
+	
+	local chan=$1
+	local salt=$2
+	local ipregex="([0-9]{1,3}\.?){4}"
+	local score=0
+	local logprefix="(Testing IP channel ${chan})"
+	local gw=`conf_get '' ${chan} gw`
+
+	[ -z "$gw" ] && { 
+		log " [d] No IP gateway found for channel ${chan}"
+		return 42
+	}
+
+	if [ `id -u` -eq 0  ]
+	then
+		log " [i]$logprefix Testing IP gateway $gw"
+		[ "` echo $gw | grep -E $ipregex `" ] || {			
+			log " [fe] Fatal error! Incorrect IP gw address format."
+			return 42 
+		}
+		ping -qQc 2 -t 5 $gw > /dev/null 2>&1 || {
+			log " [fe] Fatal error! Failed to test IP gw $gw"
+			return 4
+		}		
+	else
+		log " [i] Running not under root. Testing with current IP gateway."
+	fi
+
+	#
+	# Ping hosts
+	#
+	for ip in ${CHAN_TEST_IP_LIST}
+	do
+		gwctl_lock_wait ${ip} ${salt}
+		# Redirect routes to the current $ip
+		[ `id -u` -eq 0  ] && {
+			# Delete the route if it already exists 
+			route delete $ip > /dev/null 2>&1
+			# Adding route to the current $ip     
+			route add $ip $gw > /dev/null 2>&1 || {
+				log " [fe]$logprefix Fatal error! Failed to add route to $ip thrugh $gw"
+				return 42
+			}			
+		} 	
+
+		log " [i]$logprefix Tested path is Me ---> $gw ---> $ip "
+		if ping -Qqc 3 $ip > /dev/null
+		then
+			score=$(($score + 1))
+		else
+			log " [e]$logprefix Error pinging the host $ip "
+		fi				
+
+		[ `id -u` -eq 0  ] && {
+			route delete $ip > /dev/null 2>&1	
+		}		
+		gwctl_unlock ${ip} ${salt}
+
+		[ "$score" -ge "$CHAN_TEST_SUFFICIENT_SCORE" ] && return 0
+	done
+
+	log " [i]$logprefix Final score is $score"
+
+	return 2
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+subj_set ( ) {
+	local subj=$1; shift
+	local var=$1; shift
+	local val=$*
+	case $var in
+		current_state|cstate)
+			if [ "$subj" -a "$subj" != "default" ];
+			then
+				echo $val > ${subj}_${CURRENT_CHANF_PREFIX};
+			else
+				echo $val > ${CURRENT_CHANF_PREFIX};
+			fi
+		;;
+	esac
+	return 0
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:	DEPRECATED
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+subj_get ( ) { conf_get "$@"; return $?; }
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:	Get conf var value
+# @USAGE:	val=`conf_get <SUBJECT> <CHANNEL> <VAR SUFFIX>`
+# @RETURN:	0 or 1
+# @OUTPUT:	Var value
+#
+conf_get ( ) {
+
+	local subj=$1
+	local chan=$2
+	local suffix=$3
+
+	[ "$suffix" = "current_active_ch_name" -o \
+	  "$suffix" = "active_channel" ] && {
+		cat ${CURRENT_CHANF_PREFIX}_${subj} 2> /dev/null ||
+			cat ${CURRENT_CHANF_PREFIX} 2> /dev/null
+		return 0
+	}
+
+	eval res=\$${subj}_${chan}_${suffix}
+	[ -z "$res" ] && eval res=\$default_${chan}_${suffix}
+	[ -z "$res" ] && eval res=\$${chan}_${suffix}
+	[ -z "$chan" -a -z "$res" ] && eval res=\$${subj}_${suffix}
+	echo $res
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:	Deprecated
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+get_preferable_ch_name_by_cond ( ) {
+
+	local subj="$1"
+	local weight_cond="$2"
+	local c_tested_weight=""
+
+	[ -z "$weight_cond" ] &&
+		weight_cond=" -gt 0"
+
+	local the_greatest_sutabe_weight="0"
+	local chosen_channel=""
+
+	for channel in $channels
+	do
+		c_tested_weight="`subj_get "$subj" "$channel" weight`"
+
+		[ "$c_tested_weight" ] &&
+		[ "$c_tested_weight" $weight_cond ] &&
+		[ "$c_tested_weight" -gt "$the_greatest_sutabe_weight" ] && {
+			the_greatest_sutabe_weight=$c_tested_weight
+			chosen_channel=$channel
+		}
+	done
+	echo -n "$chosen_channel"
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:	Get var from runtime conf
+# @USAGE:
+# @RETURN:
+# @OUTPUT:	Echoes vars' value
+#
+get_runtime_conf ( ) {
+	[ -z "$1" ] && return 1	
+	local var=$1
+	read_runtime_conf
+	eval echo -n \$${var}
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION: Set var in runtime conf
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+set_runtime_conf ( ) {
+	[ -z "$1" ] && return 1	
+	local var=$1
+	local val=$2
+	local echo_value=$3
+	local salt=$4
+	local file_prefix=${3:-${ROOT}/var/general}
+	local file=${file_prefix}.${RUNTIME_CONFFILE_SUFFIX}
+	touch $file
+	[ "$salt"  ] && gwctl_lock_wait runtime_conf $salt_in_set_runtime_conf
+	if grep -E "^$var=" ${file} > /dev/null
+	then
+		sed -Ei '' "s/^${var}=.*/${var}=\"${val}\"/" $file
+	else
+		echo "$var=\"$val\"" >> $file
+	fi
+	[ "$salt"  ] && gwctl_unlock_wait runtime_conf $salt_in_set_runtime_conf
+	[ "$echo_value" ] && eval echo \$$var
+	eval $var=\"$val\"
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION: Reread runtime conf files
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+read_runtime_conf ( ) {
+        [ "`find $ROOT/var/*${RUNTIME_CONFFILE_SUFFIX} 2> /dev/null `" ] &&
+                . $ROOT/var/*${RUNTIME_CONFFILE_SUFFIX} > /dev/null 2>&1
+}
+
+#############################################################
+# Change local ip binding for some server openvpn instance
+#
+ovpn_conf_set_local_ip_binding ( ) {
+
+        local ovpn_conf_root=${OVPN_CONF_ROOT:-/etc/ovpn}
+
+        [ -z "$1" -o -z "$2" ] && return 1
+
+        local ovpn_conf_file=${ovpn_conf_root}/${2}
+
+        [ ! -f  $ovpn_conf_file ] && {
+                echo " [d] No OpenVPN conf file $ovpn_conf_file found."
+                return 1
+        }
+
+        ! grep -E "^#local[[:space:]]+$1" ${ovpn_conf_file} > /dev/null && {
+                echo " [d] No '#local $1' setting in $ovpn_conf_file found."
+                return 1
+        }
+
+        sed -Ei '' 's/^local/#local/g' ${ovpn_conf_file}
+        sed -Ei '' "s/^#local[[:space:]]+${1}/local    ${1}/g" ${ovpn_conf_file}
+}
+
+################################################
+# @FUNCTION
+# @DESCRIPTION:
+# @USAGE:
+# @RETURN:
+# @OUTPUT: 
+#
+reset_ipsec_db ( ) {
+       local from=$1
+       local to=$2
+       local from_gw=$3
+       local to_gw=$4
+       local heading_commands=$5
+       local trailing_commands=$6
+
+       ##< [ "$heading_commands" ] && heading_commands="${heading_commands};"
+       ##< [ "$trailing_commands" ] && trailing_commands="${trailing_commands};"
+
+       echo "\
+              ${heading_commands}
+              spddelete $from $to any -P in;
+              spddelete $to $from any -P out;
+              spdadd $from $to any -P in \
+                  ipsec esp/tunnel/${from_gw}-${to_gw}/require;
+              spdadd $to $from any -P out \
+                  ipsec esp/tunnel/${to_gw}-${from_gw}/require;\
+              ${trailing_commands}
+        " | $SETKEY -c
+}
+
+##########################################################
+# @FUNCTION
+# @DESCRIPTION:	Return value of one of vars by priority.
+# @USAGE:	val=`conf_get_one_of var1 var2 var3`
+# @RETURN:	1 OR 0
+# @OUTPUT:	Value of a conf var.
+#
+conf_get_one_of ( ) {
+        local val
+        while [ $# -gt 0 ]
+        do
+                if [ "$1" ]
+                then
+                        req_var_name=$1
+                        eval val=\$$req_var_name
+                        if [ "$val" ]
+                        then
+                                echo "$val"
+                                return 0
+                        fi
+                        shift
+                fi
+        done
+        return 1
+}
+
+
+########################################################################
+#       GET A LIST OF CHANNEL NAMES SORTED BY WEIGHT FOR THE SUBJECT
+#
+conf_get_subject_channels_sorted_by_weight ( ) {
+
+        local subj="$1"
+        local reverse="$3"
+        local chan=""
+        local subject_related_channels_sorted_list=""
+        local subject_related_channels_list=""
+
+        for chan in ${channels}
+        do
+                ##############################################################
+                #       SKIP OF THE CHANNEL DOES NOT RELATE TO THE SUBJECT
+                #
+                [ -z "`conf_get ${subj} ${chan} weight`" -a \
+                  -z "`conf_get ${subj} ${chan} desc`" -a \
+                  -z "`conf_get ${subj} ${chan} isp_gw`" -a \
+                  -z "`conf_get ${subj} ${chan} alive_chk`" \
+                ] && continue
+
+                chan_weight="`conf_get $subj $chan weight`"
+                : ${chan_weight:="`conf_get '' $chan weight`"}
+
+                # echo " Chan weight: ${chan_weight}"
+
+                case  "${chan_weight}" in
+                        [0-9]|[0-9][0-9]|100)
+                                eval local weight_${chan_weight}=\"\$weight_${chan_weight} ${chan}\"
+                        ;;
+                esac
+        done
+
+        if [ -z "${reverse}" ]
+        then
+                local weight_i=100
+                while [ ${weight_i} -gt 0 ]
+                do
+                        eval subject_related_channels_sorted_list=\"${subject_related_channels_sorted_list}\
+                                \$weight_${weight_i}\"
+                        weight_i=$((${weight_i} - 1))
+                done
+        else
+                local weight_i=0
+                while [ ${weight_i} -le 100 ]
+                do
+                        eval subject_related_channels_sorted_list=\"${subject_related_channels_sorted_list}\
+                                 \$weight_${weight_i}\"
+                        weight_i=$((${weight_i} + 1))
+                done
+        fi
+
+        echo "${subject_related_channels_sorted_list}"
+}
+

@@ -1,0 +1,308 @@
+#!/bin/sh
+
+. /etc/gwctl.conf
+. ${COMMON_SH_LIB}
+
+LINE1="----------------------"
+
+################################
+#
+#	INIT 
+#
+[ "x" ] && {
+
+#
+# CLEANUP ${ROOT}/var/* files
+#
+cd ${ROOT}
+[ "${ROOT}" != "/" -a -z "`echo ${ROOT} | grep '\.\.'`" -a `pwd | grep gwctl`  ] && {
+        rm -rf ${ROOT}/var/*
+}
+
+#
+# SETUP IO CHANNELS.
+#
+echo "" > ${DMN_IN} && chgrp www ${DMN_IN} && chmod 660 ${DMN_IN}
+echo "" > ${WWW_IN} && chgrp www ${WWW_IN} && chmod 660 ${DMN_IN}
+
+#
+# REDIRECT OUTPUT TO THE LOG FILE.
+#
+exec > $DMNLOGF
+
+#
+# UNLOCK ALL POTENTIALLY LOCKED RESOURCES.
+#
+gwctl_clear_all_locks
+
+#
+# SAVE PID.
+#
+echo $$ > $DMNPIDF
+
+#
+# ANNOUNCE EXECUTION BEGINNING.
+#
+echo " [i] STARTED AT `date`"
+
+#
+# TRAP EXIT EVENT.
+#
+trap __exit TERM QUIT INT
+
+__exit( ) {
+	echo
+	echo EXITING GENTLY
+	echo
+	rm $DMNPIDF
+	exit 0;
+}
+
+#
+# SETUP MODE (BY DEFAULT IT IS AUTOMATIC) WHEN STARTING
+#
+if [ "`conf_get mode`" ]
+then
+	set_runtime_conf mode `conf_get mode` 
+else
+	set_runtime_conf mode AUTO 
+fi
+
+} # END INIT SECTION.
+
+####################################################################
+
+#
+# LOGGING PROCEDURE
+#
+log ( ) { echo ${LOG_PREFIX} $1; }
+
+#
+#	SWITCH PROCEDURE
+#
+sw ( ) {
+	local subj=$1
+	local chan=$2
+	local state
+	[ "x" ] && {
+		if [ "`conf_get ${subj} ${chan} oncmd`" ]
+		then
+			eval `conf_get $subj $chan oncmd` > /dev/null
+		else
+			${SWITCH_SCRIPT} $subj $chan > /dev/null
+		fi
+		return $?
+	}
+}
+
+#
+#	SWITCHING DAEMON THREAD
+#
+while :
+do
+	LOG_PREFIX=""
+
+	#
+	# IF NOT IN AUTOMODE...
+	#
+	in_automode || { sleep 10 && log " [i] Running in Manual mode at `date`" && continue; }
+
+	log "${LINE1}${LINE1}"
+	log " Running in Automode at `date`"
+	log "${LINE1}${LINE1}"
+
+	#
+	# RESET CHANNELS STATE CACHE
+	#
+	for chan in $channels
+	do
+		gwctl_lock_wait channels_state gwctld
+			set_runtime_conf ${chan}_state 42 
+		gwctl_unlock channels_state gwctld
+	done
+
+	#
+	# LOOP OVER SUBJECTS
+	#
+	for subj in ${subjects}
+	do
+		in_automode || { sleep 0.5 && break; }
+
+		LOG_PREFIX=" [SUBJECT ${subj}] "
+
+		gwctl_lock_wait ${subj} gwctld
+
+		log "${LINE1}"
+		log " Working on subject ${subj}."
+		log "${LINE1}"
+
+		[ "`get_runtime_conf ${subj}_void_in_automode`" ] && {
+			log " [i] Set to void this subject in automode. Leaving it in peace..."
+			continue
+		}
+
+		#
+		# IF CURRENT ACTIVE CHANNEL FOR THE SUBJECT
+		# IS AN EMPTY STRING, SET IT TO "UNKNOWN".
+		#
+		[ -z "`get_runtime_conf ${subj}_active_channel`" ] && set_runtime_conf ${subj}_active_channel UNKNOWN 
+
+		#
+		# WHAT IS A CURRENT ACTIVE CHANNEL?
+		#
+		active_chan=`get_runtime_conf ${subj}_active_channel`
+
+		log " Current active channel: ${active_chan}"
+
+		#
+		# CHECK CURRENT CHANNEL STATE
+		#
+		# IF ACTIVE CHANNEL IS ALREADY KNOWN AND THIS SUBJECT
+		# DOES NOT HAVE AN INDIVIDUAL COMMAND FOR CHECKING IT
+		#
+		if [ "`get_runtime_conf ${active_chan}_state`" -a \
+			"`get_runtime_conf ${active_chan}_state`" != '42' -a \
+				-z "`conf_get ${subj} ${active_chan} chk_cmd`" ]
+		then
+			#
+			# GET ACTIVE CHANNEL STATE FROM CACHE
+			#
+			active_chan_state="`get_runtime_conf ${active_chan}_state`"
+		#
+		# ELSE...
+		#
+		else
+			#
+			# IF THERE IS NO INDIVIDUAL CHECK COMMAND FOR THE CHANNEL WITH THE SUBJCT
+			#
+			if [ -z "`conf_get ${subj} ${active_chan} chk_cmd`" ]
+			then
+				#
+				# DO GENERIC CHANNEL STATE CHECK 
+				# (TODO: ONLY IP IS SUPPORTED AT THE MOMENT)
+				#
+				chk_ip_channel_is_alive $active_chan $subj
+				active_chan_state=$?
+				set_runtime_conf ${subj}_active_channel_state $active_chan_state
+				set_runtime_conf ${active_chan}_state $active_chan_state
+			#
+			# ELSE, RUN INDIVIDUAL CHECK COMMAND FOR THE CHANNEL WITH THE SUBJECT
+			#
+			else
+				# (TODO: NOT IMPLEMENTED YET)
+			fi
+		fi
+
+		#
+		# GET CURRENT ACTIVE CHANNEL WEIGHT...
+		#
+		active_chan_weight="`conf_get_one_of ${subj}_${active_chan}_weight ${active_chan}_weight`"
+		#
+		# IF UNKNOWN, BY DEFAULT IT WILL BE SET TO 0.
+		#
+		[ -z "$active_chan_weight" ] && 
+			active_chan_weight=0
+
+		log " Current active channel state: ${active_chan_state}"
+
+		#
+		# LOOP OVER SORTED (PRIVILEGED FIRST!) LIST OF CHANNELS FOR CURRENT SUBJECT
+		#
+		for chan in `conf_get_subject_channels_sorted_by_weight ${subj}`
+		do
+			#
+			# IF THE TESTED CHANNEL HAS MORE WEIGHT THAN THE CURRENT ONE OR
+			# IF THE CURRENT ONE IS DEAD, ... 
+			#
+			if [	"`conf_get_one_of ${subj}_${chan}_weight ${chan}_weight`" -gt $active_chan_weight ] ||
+				[ "${active_chan_state}" -ne 0 ]
+			then
+
+				log " Looking if the channel ${chan} is alive."
+
+				#
+				# GET THE CHANNELS' STATE
+				#
+				state=42
+
+				if [ -z "`conf_get ${subj} ${chan} chk_cmd`" -a "`get_runtime_conf ${chan}_state`" -a \
+					"`get_runtime_conf ${chan}_state`" -ne 42 ]
+				then
+					state=`get_runtime_conf ${chan}_state`
+					log " Already know the answer: ${state}."
+				else
+					gwctl_lock_wait	check_${chan} gwctld
+						chk_ip_channel_is_alive ${chan} ${subj}
+						state=$?
+						log " ${chan} state is $state"
+						[ -z "`conf_get ${subj} ${chan} chk_cmd`" ] &&
+							set_runtime_conf ${chan}_state $state
+					gwctl_unlock check_${chan} gwctld
+				fi
+
+				#
+				# SWITCH TO THIS FINE CHANNEL IF IT IS ALIVE
+				#
+				if [ $state -eq 0 ]
+				then
+					log " Switching ${subj} to ${chan} at `date`!!! =))) " 
+					sw ${subj} ${chan}
+					set_runtime_conf ${subj}_active_channel_state $state
+					set_runtime_conf ${subj}_active_channel $chan
+					break
+				fi
+			fi
+		done
+
+		gwctl_unlock ${subj} gwctld		
+		sleep 1
+	done
+done &
+
+#
+#	WEB INTERFACE LISTENER THREAD
+#
+while :
+do
+	LOG_PREFIX="( WWW INTERFACE COMMAND EXECUTOR )"
+	getbuf $DMN_IN INPT
+	if [ "$INPT" ];
+	then
+		log " [d] Input from www interface was $INPT "
+		case "$INPT" in
+			SET_VAR*)
+				s=`echo ${INPT##SET_VAR_} | sed -E 's/([^=]+)=(.*)/\1__SEP__\2/'`
+				var=`echo "$s" | awk -F"__SEP" '{print $1}'`
+				val=`echo "$s" | awk -F"__SEP__" '{print $2}'`
+				set_runtime_conf "$var" "$val"
+			;;
+			CH_CHAN*)
+				INPT2=${INPT##CH_CHAN_}
+				subj=`echo "$INPT2" | sed -E 's/(.+)@.+/\1/'`
+				chan=`echo "$INPT2" | sed -E 's/.+@(.+)/\1/'`
+				log " [i] Going to switch $subj to $chan"
+				log " [i] Forking and calling the executable..."
+				{	
+					sw  $subj $chan
+					log " [i] Executable returned $?"
+				} &
+			;;
+			"SET_MODE_AUTO")
+				if [ "$MODEF" ];
+				then
+					set_runtime_conf mode AUTO
+				fi
+			;;
+			"SET_MODE_MANUAL")
+				if [ "$MODEF" ];
+				then
+					set_runtime_conf mode MANUAL
+				fi
+			;;
+			*)
+			;;
+		esac
+	fi
+	
+	sleep 1
+done &

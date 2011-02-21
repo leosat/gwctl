@@ -1,0 +1,28 @@
+#!/bin/sh
+
+. /etc/gwctl.conf
+
+case $1 in
+	start)
+		[ -r $DMNPIDF ] && { 
+			echo Already running? Check $DMNPIDF.
+			$0 stop
+		} 
+		/usr/sbin/daemon -c $GWCTLD
+	;;
+	stop)
+		PID=`cat $DMNPIDF > /dev/null`
+		[ "$PID" ] &&
+			kill "$PID" 
+		pkill -f $GWCTLD
+		rm $DMNPIDF
+	;;
+	restart)
+		$0 stop
+		sleep 2
+		$0 start
+	;;
+	*)
+		echo "Usage:  $0 (start|stop|restart)"
+	;;
+esac

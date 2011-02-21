@@ -1,0 +1,31 @@
+#
+# Please, try to void editing this file: edit conf.local instead. 
+#
+ROOT=/gwctl
+RUNTIME_CONFFILE_SUFFIX=runtime_conf
+DMN_IN=$ROOT/var/dmn_in
+WWW_IN=$ROOT/var/www_in
+CURRENT_CHANF_PREFIX=$ROOT/var/cstatef
+PENDING_CHANF_PREFIX=$ROOT/var/pstatef
+DMNPIDF=$ROOT/var/gwctld.pid
+DMNLOGF=$ROOT/var/gwctld.log
+MODEF=$ROOT/var/mode
+TSFILE=$ROOT/var/tsfile
+GWCTLD=$ROOT/bin/gwctld
+GWCTLD_RC_SCRIPT=$ROOT/etc/rc.gwctld
+SWITCH_SCRIPT_NAME=${ROOT}/bin/switch.sh
+SWITCH_SCRIPT=$SWITCH_SCRIPT_NAME
+WWW_IFACE_HOSTNAME=${SERVER_NAME:-`hostname`}
+WWW_HEADER=$ROOT/www/header
+COMMON_SH_LIB=$ROOT/lib/common
+GWCTLD_SEC_TO_SLEEP=15
+SW_RES="switch"
+LCK_FILE_PREFIX=$ROOT/var/lck
+
+#
+# For testing ISP status...
+#
+# CHAN_TEST_IP_LIST="69.147.125.65 67.195.160.76 209.191.122.70 98.137.149.56 72.30.2.43"
+CHAN_TEST_IP_LIST="8.8.8.8 69.147.125.65 67.195.160.76 209.191.122.70 98.137.149.56"
+CHAN_TEST_SUFFICIENT_SCORE=3
+

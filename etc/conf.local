@@ -1,0 +1,82 @@
+#
+# SUBJECTS
+#
+subjects="inet podolsk_tun kotelniky_tun kotelniky_italinox_tun"
+
+#
+# CHANNELS
+#
+channels="corbina macomnet"
+
+#
+# CHANNEL GATEWAYS (FOR IP CHANNELS)
+# 
+corbina_gw=85.21.118.145
+macomnet_gw=213.247.232.145
+
+#
+# INTERNET (NOT TUNNELS)
+#
+inet_void_in_automode=""
+inet_desc="Интернет (кроме тоннелей)"
+
+inet_corbina_oncmd="$ROOT/bin/switch.sh inet corbina"
+inet_corbina_weight="2"
+
+inet_macomnet_oncmd="$ROOT/bin/switch.sh inet macomnet"
+inet_macomnet_weight="1"
+
+#
+# CONFIGURE KOTELNIKY MAIN TUNNEL
+#
+
+# > For corbina channel
+kotelniky_tun_desc="Тоннель с Котельниками (Кроме Италинокс)"
+kotelniky_tun_corbina_oncmd="$ROOT/bin/switch.sh kotelniky_tun corbina"
+kotelniky_tun_corbina_weight=1
+kotelniky_tun_corbina_desc="..."
+
+# > For macomnet channel
+kotelniky_tun_macomnet_oncmd="$ROOT/bin/switch.sh kotelniky_tun macomnet"
+kotelniky_tun_macomnet_weight=2
+kotelniky_tun_macomnet_desc="....."
+
+#
+# CONFIGURE KOTELNIKY ITALINOX TUNNEL
+#
+
+# > For corbina channel
+kotelniky_italinox_tun_desc="Тоннель с Котельниками (Италинокс)"
+kotelniky_italinox_tun_corbina_oncmd="$ROOT/bin/switch.sh kotelniky_italinox_tun corbina"
+kotelniky_italinox_tun_corbina_weight=1
+kotelniky_italinox_tun_corbina_desc="..."
+
+# > For macomnet channel
+kotelniky_italinox_tun_macomnet_oncmd="$ROOT/bin/switch.sh kotelniky_italinox_tun macomnet"
+kotelniky_italinox_tun_macomnet_weight=2
+kotelniky_italinox_tun_macomnet_desc="....."
+
+#
+# CONFIGURE PODOLSK MAIN TUNNEL
+#
+
+# > For corbina channel
+podolsk_tun_desc="Тоннель с Подольском."
+podolsk_tun_corbina_oncmd="$ROOT/bin/switch.sh podolsk_tun corbina"
+podolsk_tun_corbina_weight=1
+podolsk_tun_corbina_desc="..."
+
+# > For macomnet channel
+podolsk_tun_macomnet_oncmd="$ROOT/bin/switch.sh podolsk_tun macomnet"
+podolsk_tun_macomnet_weight=2
+podolsk_tun_macomnet_desc="....."
+
+
+##########################
+# Testing
+#
+only_for_testing_UNKNOWN_oncmd="$ROOT/do.sh only_for_testing UNKNOWN"
+only_for_testing_UNKNOWN_weight=15
+only_for_testing_UNKNOWN_gw=80.71.247.241
+only_for_testing_alive_chk=true
+
