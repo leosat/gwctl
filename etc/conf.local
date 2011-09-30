@@ -19,8 +19,8 @@ isp2_gw=2.3.4.5
 #####################################
 inet_void_in_automode=""
 inet_desc="The internet connection"
-inet_isp1_weight="2"
-inet_isp2_weight="1"
+inet_isp1_weight="1"
+inet_isp2_weight="2"
 
 ###############################################
 #	TUNNEL
