@@ -25,7 +25,6 @@ LCK_FILE_PREFIX=$ROOT/var/lck
 #
 # For testing ISP status...
 #
-# CHAN_TEST_IP_LIST="69.147.125.65 67.195.160.76 209.191.122.70 98.137.149.56 72.30.2.43"
-CHAN_TEST_IP_LIST="8.8.8.8 69.147.125.65 67.195.160.76 209.191.122.70 98.137.149.56"
-CHAN_TEST_SUFFICIENT_SCORE=3
+CHAN_TEST_IP_LIST="`get_addr_list rambler.ru` `get_addr_list yandex.ru` `get_addr_list facebook.com` `get_addr_list freebsd.org` 8.8.8.8 8.8.4.4"
+CHAN_TEST_SUFFICIENT_SCORE=4
 

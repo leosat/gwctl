@@ -27,6 +27,6 @@ inet_isp2_weight="2"
 ###############################################
 tunnel_isp1_weight="2"
 tunnel_isp2_weight="1"
-tunnel_isp1_alive_chk=" COMMAND_TO_CHECK_IF_IT_IS_ALIVE "
-tunnel_isp2_alive_chk="${tunnel_isp1_alive_chk}"
+tunnel_isp1_alive_chk=" COMMAND_TO_CHECK_IF_ISP1_IS_ALIVE_FOR_THE_TUNNEL "
+tunnel_isp2_alive_chk=" ANOTHER_COMMAND_TO_CHECK_IF_ISP2_IS_ALIVE_FOR_THE_TUNNEL"
 
