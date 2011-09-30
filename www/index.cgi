@@ -1,7 +1,6 @@
 #!/bin/sh
 
 . /etc/gwctl.conf
-. $WWW_HEADER
 . $COMMON_SH_LIB
 
 AUTO_RELOAD_SEC=1 AUTO_REFRESH_SEC=25 SUBJ=default 
@@ -215,9 +214,23 @@ print_reload_page_html ( ) {
 	exit 0
 }
 
+#################################### GO! ##############################################
+
+#
+# Output HTTP header
+#
+echo "content-type: text/html; charset=koi8-r"
+echo ""
+
+#
+# Then start doing useful things...
+#
 read_runtime_conf 
 check_gwctld_is_running
 
+#
+# If we need to do something, ask for the action confirmation first.
+#
 case "$GET_DO" in
 	CH_*)
 		[ -z "$GET_CONFIRM" ] && {
