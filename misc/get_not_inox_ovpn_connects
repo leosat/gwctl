@@ -1,1 +1,0 @@
-grep Initiated /var/log/ovpn.server.log | grep -Ev "`/gwctl/filter_not_inox_nets.sh`" 

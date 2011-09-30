@@ -175,22 +175,23 @@ do
 			#
 			# IF THERE IS NO INDIVIDUAL CHECK COMMAND FOR THE CHANNEL WITH THE SUBJCT
 			#
-			if [ -z "`conf_get ${subj} ${active_chan} chk_cmd`" ]
+			if [ -z "`conf_get_one_of ${subj}_${active_chan}_chk_cmd ${active_chan}_chk_cmd`" ]
 			then
 				#
 				# DO GENERIC CHANNEL STATE CHECK 
 				# (TODO: ONLY IP IS SUPPORTED AT THE MOMENT)
 				#
 				chk_ip_channel_is_alive $active_chan $subj
-				active_chan_state=$?
-				set_runtime_conf ${subj}_active_channel_state $active_chan_state
-				set_runtime_conf ${active_chan}_state $active_chan_state
 			#
 			# ELSE, RUN INDIVIDUAL CHECK COMMAND FOR THE CHANNEL WITH THE SUBJECT
 			#
 			else
-				# (TODO: NOT IMPLEMENTED YET)
+				eval "`conf_get_one_of ${subj}_${active_chan}_chk_cmd ${active_chan}_chk_cmd`"
 			fi
+
+			active_chan_state=$?
+			set_runtime_conf ${subj}_active_channel_state $active_chan_state
+			set_runtime_conf ${active_chan}_state $active_chan_state
 		fi
 
 		#

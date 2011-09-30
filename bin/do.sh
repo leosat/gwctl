@@ -1,1 +1,0 @@
-/gwctl/bin/switch.sh
