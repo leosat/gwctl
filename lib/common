@@ -1,3 +1,7 @@
+get_addr_list ( ) {
+	host $1 |  grep "has address" | awk '{ a = a" "$4;} END { print a;} '
+}
+
 ################################################
 # @FUNCTION
 # @DESCRIPTION:
@@ -96,6 +100,7 @@ gwctl_lock_wait ( ) {
 	local salt=$2
 	local return_on_collision=$3
 	local debug=$4
+	local debug=1
 	[ -z "$resource" -o -z "$salt" ] && return 1
 	local ticket_prefix=${LCK_FILE_PREFIX}_${resource}
 	local ticket=${ticket_prefix}@${salt}_$$
@@ -111,7 +116,7 @@ gwctl_lock_wait ( ) {
 			# LOCKED IT!... =)
 			return 0
 		else
-			# COLLISION DETECTED, REMOVE THE TICKET AND START AGAIN...
+			# COLLISION DETECTED, REMOVE THE TICKET AND START AGAIN...			
 			rm ${ticket}
 			[ "${debug}" ] && echo " [d] Locking collision for ${resource} in PID=$$, SALT=${salt}" 
 			[ "${return_on_collision}" ] && return 2
