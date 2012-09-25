@@ -151,7 +151,7 @@ print_main_menu ( ) {
 }
 
 print_html_head ( ) {
-	echo "
+	echo "<!DOCTYPE html>
 	<html>
 	<head>
 		<title>Control for $WWW_IFACE_HOSTNAME</title>
